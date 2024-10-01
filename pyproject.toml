@@ -2,7 +2,7 @@
 name = "insurance-chroma-groq"
 version = "0.1.1"
 description = "groq, chroma, pdf, rag 사용가능..!"
-authors = ["teddy <teddylee777@gmail.com>"]
+authors = ["jun99 <dkssud374@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 package-mode = false
@@ -38,7 +38,8 @@ rank-bm25 = "^0.2.2"
 
 # 데이터베이스 및 캐시 관련 패키지
 redis = "^5.0.3"
-chromadb = "^0.4.24"
+chromadb = "^0.5.0" 
+    # ^0.4.24에서 바꿈 : 오류때문에
 
 # PDF 및 파일 처리 관련 패키지
 pymupdf = "^1.24.1"
