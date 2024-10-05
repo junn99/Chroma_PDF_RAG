@@ -1,0 +1,640 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# 합성 테스트 데이터셋 생성\n",
+    "\n",
+    "**왜 합성 테스트 데이터(Synthetic Test Dataset) 인가?**\n",
+    "\n",
+    "RAG(검색 증강 생성) 증강 파이프라인의 성능을 평가하는 것은 매우 중요합니다. \n",
+    "\n",
+    "그러나 문서에서 수백 개의 QA(질문-문맥-응답) 샘플을 수동으로 생성하는 것은 시간과 노동력이 많이 소요될 수 있습니다. 또한 사람이 만든 질문은 철저한 평가에 필요한 복잡성 수준에 도달하기 어려워 궁극적으로 평가의 품질에 영향을 미칠 수 있습니다. \n",
+    "\n",
+    "합성 데이터 생성을 사용하면 데이터 집계 프로세스에서 **개발자의 시간을 90%** 까지 줄일 수 있습니다.\n",
+    "\n",
+    "- RAGAS: https://docs.ragas.io/en/latest/concepts/testset_generation.html"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "아래의 주석을 해제한 후 실행하여 패키지를 설치 후 진행해주세요"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# !pip install -qU ragas"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "True"
+      ]
+     },
+     "execution_count": 1,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# API KEY를 환경변수로 관리하기 위한 설정 파일\n",
+    "from dotenv import load_dotenv\n",
+    "\n",
+    "# API KEY 정보로드\n",
+    "load_dotenv()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "LangSmith 추적을 시작합니다.\n",
+      "[프로젝트명]\n",
+      "CH16-Evaluations\n"
+     ]
+    }
+   ],
+   "source": [
+    "# LangSmith 추적을 설정합니다. https://smith.langchain.com\n",
+    "# !pip install -qU langchain-teddynote\n",
+    "from langchain_teddynote import logging\n",
+    "\n",
+    "# 프로젝트 이름을 입력합니다.\n",
+    "logging.langsmith(\"CH16-Evaluations\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 실습에 활용한 문서\n",
+    "\n",
+    "소프트웨어정책연구소(SPRi) - 2023년 12월호\n",
+    "\n",
+    "- 저자: 유재흥(AI정책연구실 책임연구원), 이지수(AI정책연구실 위촉연구원)\n",
+    "- 링크: https://spri.kr/posts/view/23669\n",
+    "- 파일명: `SPRI_AI_Brief_2023년12월호_F.pdf`\n",
+    "\n",
+    "_실습을 위해 다운로드 받은 파일을 `data` 폴더로 복사해 주시기 바랍니다_\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 문서 전처리"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "문서를 로드 합니다."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "30"
+      ]
+     },
+     "execution_count": 3,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "from langchain_community.document_loaders import PDFPlumberLoader\n",
+    "\n",
+    "# 문서 로더 생성\n",
+    "# loader = PDFPlumberLoader(\"/home/jun/my_project/langchain_tutorial/langsmith/data/SPRI_AI_Brief_2023년12월호_F (1).pdf\")\n",
+    "\n",
+    "loader = PDFPlumberLoader(\"/home/jun/my_project/langchain_tutorial/Eval_dataset/evaldata/글로벌 Top 6 빅테크 기업 AI 투자 동향.pdf\")\n",
+    "\n",
+    "# 문서 로딩\n",
+    "docs = loader.load()\n",
+    "\n",
+    "# 목차, 끝 페이지 제외\n",
+    "docs = docs[3:-1]\n",
+    "\n",
+    "# 문서의 페이지수\n",
+    "len(docs)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "각 문서 객체에는 `metadata` 를 통해 액세스할 수 있는 문서에 대한 추가 정보를 저장하는 데 사용할 수 있는 메타데이터 사전이 포함되어 있습니다. \n",
+    "\n",
+    "메타데이터 사전에는 `filename` 이라는 키가 포함되어 있는지 확인하세요. \n",
+    "\n",
+    "이 키는 Test datasets 생성 프로세스에서 활용될 것이므로. 메타데이터의 `filename` 속성은 동일한 문서에 속한 청크를 식별하는 데 사용됩니다. "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "{'source': '/home/jun/my_project/langchain_tutorial/Eval_dataset/evaldata/글로벌 Top 6 빅테크 기업 AI 투자 동향.pdf',\n",
+       " 'file_path': '/home/jun/my_project/langchain_tutorial/Eval_dataset/evaldata/글로벌 Top 6 빅테크 기업 AI 투자 동향.pdf',\n",
+       " 'page': 3,\n",
+       " 'total_pages': 34,\n",
+       " 'Author': '김종금',\n",
+       " 'Creator': 'Hwp 2020 11.0.0.7936',\n",
+       " 'Producer': 'Hancom PDF 1.3.0.546',\n",
+       " 'CreationDate': \"D:20240909085421+09'00'\",\n",
+       " 'ModDate': \"D:20240909085421+09'00'\",\n",
+       " 'PDFVersion': '1.4'}"
+      ]
+     },
+     "execution_count": 4,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "docs[0].metadata"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# metadata 설정(filename 이 존재해야 함)\n",
+    "for doc in docs:\n",
+    "    doc.metadata[\"filename\"] = doc.metadata[\"source\"]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "{'source': '/home/jun/my_project/langchain_tutorial/Eval_dataset/evaldata/글로벌 Top 6 빅테크 기업 AI 투자 동향.pdf',\n",
+       " 'file_path': '/home/jun/my_project/langchain_tutorial/Eval_dataset/evaldata/글로벌 Top 6 빅테크 기업 AI 투자 동향.pdf',\n",
+       " 'page': 3,\n",
+       " 'total_pages': 34,\n",
+       " 'Author': '김종금',\n",
+       " 'Creator': 'Hwp 2020 11.0.0.7936',\n",
+       " 'Producer': 'Hancom PDF 1.3.0.546',\n",
+       " 'CreationDate': \"D:20240909085421+09'00'\",\n",
+       " 'ModDate': \"D:20240909085421+09'00'\",\n",
+       " 'PDFVersion': '1.4',\n",
+       " 'filename': '/home/jun/my_project/langchain_tutorial/Eval_dataset/evaldata/글로벌 Top 6 빅테크 기업 AI 투자 동향.pdf'}"
+      ]
+     },
+     "execution_count": 8,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "docs[0].metadata"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 데이터셋 생성"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from ragas.testset.generator import TestsetGenerator\n",
+    "from ragas.testset.evolutions import simple, reasoning, multi_context, conditional\n",
+    "from ragas.llms import LangchainLLMWrapper\n",
+    "from ragas.embeddings import LangchainEmbeddingsWrapper\n",
+    "from ragas.testset.extractor import KeyphraseExtractor\n",
+    "from ragas.testset.docstore import InMemoryDocumentStore\n",
+    "\n",
+    "from langchain_groq import ChatGroq\n",
+    "from langchain.text_splitter import RecursiveCharacterTextSplitter\n",
+    "from langchain_community.embeddings import HuggingFaceBgeEmbeddings\n",
+    "\n",
+    "\n",
+    "# 데이터셋 생성기\n",
+    "generator_llm = ChatGroq(model=\"llama-3.1-70b-versatile\")\n",
+    "# 데이터셋 비평기\n",
+    "critic_llm = ChatGroq(model=\"llama-3.2-90b-text-preview\")\n",
+    "# 문서 임베딩 & 임베딩 모델 정의\n",
+    "model_name = \"BAAI/bge-m3\"\n",
+    "model_kwargs = {\"device\":\"cpu\"}\n",
+    "encode_kwargs = {\"normalize_embeddings\":True}\n",
+    "embeddings = HuggingFaceBgeEmbeddings(\n",
+    "model_name=model_name, model_kwargs=model_kwargs,encode_kwargs=encode_kwargs\n",
+    "\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "DocumentStore를 초기화합니다. 사용자 정의 LLM과 임베딩을 사용합니다."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# 텍스트 분할기를 설정합니다.\n",
+    "splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)\n",
+    "\n",
+    "# LangChain의 ChatOpenAI 모델을 LangchainLLMWrapper로 감싸 Ragas와 호환되게 만듭니다.\n",
+    "langchain_llm = LangchainLLMWrapper(ChatGroq(model=\"llama-3.1-70b-versatile\"))\n",
+    "\n",
+    "# 주요 구문 추출기를 초기화합니다. 위에서 정의한 LLM을 사용합니다.\n",
+    "keyphrase_extractor = KeyphraseExtractor(llm=langchain_llm)\n",
+    "\n",
+    "# ragas_embeddings 생성\n",
+    "ragas_embeddings = LangchainEmbeddingsWrapper(embeddings)\n",
+    "\n",
+    "# InMemoryDocumentStore를 초기화합니다.\n",
+    "# 이는 문서를 메모리에 저장하고 관리하는 저장소입니다.\n",
+    "docstore = InMemoryDocumentStore(\n",
+    "    splitter=splitter,\n",
+    "    embeddings=ragas_embeddings,\n",
+    "    extractor=keyphrase_extractor,\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "TestSet 을 생성합니다."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "generator = TestsetGenerator.from_langchain(\n",
+    "    generator_llm,\n",
+    "    critic_llm,\n",
+    "    ragas_embeddings,\n",
+    "    docstore=docstore,\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**질문의 유형별 분포**\n",
+    "\n",
+    "- simple: 간단한 질문\n",
+    "- reasoning: 추론이 필요한 질문\n",
+    "- multi_context: 여러 맥락을 고려해야 하는 질문\n",
+    "- conditional: 조건부 질문"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# 질문 유형별 분포 결정\n",
+    "# simple: 간단한 질문, reasoning: 추론이 필요한 질문, multi_context: 여러 맥락을 고려해야 하는 질문, conditional: 조건부 질문\n",
+    "distributions = {simple: 0.4, reasoning: 0.2, multi_context: 0.2, conditional: 0.2}"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "- documents: 문서 데이터\n",
+    "- test_size: 생성할 질문의 수\n",
+    "- distributions: 질문 유형별 분포\n",
+    "- with_debugging_logs: 디버깅 로그 출력 여부"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "7e531770c5bb418cb077b51241ec1934",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "embedding nodes:   0%|          | 0/98 [00:00<?, ?it/s]"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Failed to batch ingest runs: langsmith.utils.LangSmithRateLimitError: Rate limit exceeded for https://api.smith.langchain.com/runs/batch. HTTPError('429 Client Error: Too Many Requests for url: https://api.smith.langchain.com/runs/batch', '{\"detail\":\"Monthly unique traces usage limit exceeded\"}')\n",
+      "post: trace=1368479d-cf97-41b3-9bd0-473694a5d2b3,id=1368479d-cf97-41b3-9bd0-473694a5d2b3; trace=b0f283d9-dcaa-4518-a7c0-8463fa248f00,id=b0f283d9-dcaa-4518-a7c0-8463fa248f00; trace=997b96b7-faa1-43c8-aea8-5a30eae57e03,id=997b96b7-faa1-43c8-aea8-5a30eae57e03; trace=3b77a710-a3ad-4805-bc65-729badbf986e,id=3b77a710-a3ad-4805-bc65-729badbf986e; trace=67fb0452-8afc-43db-81f3-73661d0d1be8,id=67fb0452-8afc-43db-81f3-73661d0d1be8; trace=086a3728-2f06-43c5-a75b-f004323ae7b5,id=086a3728-2f06-43c5-a75b-f004323ae7b5; trace=b4f7d0f9-117c-43c0-b976-2a8f0d35f123,id=b4f7d0f9-117c-43c0-b976-2a8f0d35f123; trace=ad5820b7-6676-4ca8-af37-748f6b34b5db,id=ad5820b7-6676-4ca8-af37-748f6b34b5db; trace=2039faf7-6ea2-44d7-83fe-065b4ecac06e,id=2039faf7-6ea2-44d7-83fe-065b4ecac06e\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "7cdd5fe8e3d34c7489c85f750cd538f2",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "Generating:   0%|          | 0/1 [00:00<?, ?it/s]"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "[ragas.testset.filters.DEBUG] context scoring: {'clarity': 2, 'depth': 3, 'structure': 2, 'relevance': 3, 'score': 2.5}\n",
+      "[ragas.testset.evolutions.DEBUG] keyphrases in merged node: ['Meta AI', 'AI acquisitions', 'Artificial intelligence', 'Machine learning', 'Meta AI investments']\n",
+      "[ragas.testset.evolutions.INFO] seed question generated: \"Meta\\uc758 AI \\ud22c\\uc790 \\uc0ac\\ub840\\uc5d0 \\ucd1d\\ubc31\\ub85c\\ub4dc\\ub9ac\\uc5d0 \\uc788\\uc2b5\\ub2c8\\ub2e4.\"\n",
+      "[ragas.testset.filters.DEBUG] filtered question: {'feedback': \"The question appears to be written in Korean and translates to 'What is the AI model used by Meta for translation?'. However, the question is unclear because it does not specify which translation model or context it is referring to. Meta, being a large technology company, likely employs various AI models for different translation tasks. To improve clarity and answerability, the question could specify the type of translation (e.g., language pairs, specific application), the context (e.g., within a particular product or service), or the time frame of interest (e.g., current, historical).\", 'verdict': 0}\n",
+      "[ragas.testset.evolutions.INFO] rewritten question: \"What is the AI model used by Meta for machine translation in their products and services?\"\n",
+      "\n",
+      "This revised question provides more context and specificity about the type of translation model being asked about, which should help to improve clarity and answerability.\n",
+      "[ragas.testset.filters.DEBUG] filtered question: {'feedback': 'The question asks for the AI model used by Meta for machine translation in their products and services. It is clear in specifying the company (Meta) and the application (machine translation in products and services), making the intent straightforward. However, the question does not specify a particular time frame or product/service, which could lead to ambiguity if Meta uses different models across different platforms or has changed models over time. To further improve clarity and answerability, the question could specify the time frame of interest (e.g., current, past) or particular products/services (e.g., Facebook, Instagram).', 'verdict': 1}\n",
+      "[ragas.testset.evolutions.DEBUG] answer generated: {'answer': 'The answer to given question is not present in context', 'verdict': -1}\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Failed to batch ingest runs: langsmith.utils.LangSmithRateLimitError: Rate limit exceeded for https://api.smith.langchain.com/runs/batch. HTTPError('429 Client Error: Too Many Requests for url: https://api.smith.langchain.com/runs/batch', '{\"detail\":\"Monthly unique traces usage limit exceeded\"}')\n",
+      "post: trace=a06727a7-d6d2-4332-9ab0-c6b1d0416f94,id=a06727a7-d6d2-4332-9ab0-c6b1d0416f94; trace=4791ffea-99d0-4a1f-b156-9f5bd1161f4e,id=4791ffea-99d0-4a1f-b156-9f5bd1161f4e; trace=eee56339-a04d-4438-9e83-a91d573680c7,id=eee56339-a04d-4438-9e83-a91d573680c7; trace=93839071-5ab7-4bd3-9ccd-65a42c7e78b1,id=93839071-5ab7-4bd3-9ccd-65a42c7e78b1; trace=ff63e84e-dcb7-45e2-8221-061501e56a07,id=ff63e84e-dcb7-45e2-8221-061501e56a07; trace=88992182-73a3-4e72-adcc-8da686ac44a7,id=88992182-73a3-4e72-adcc-8da686ac44a7; trace=d7a1b148-dc77-45da-b5b1-6906e3c8d0c2,id=d7a1b148-dc77-45da-b5b1-6906e3c8d0c2; trace=4fc2d634-8d73-4321-acde-7fa93552a470,id=4fc2d634-8d73-4321-acde-7fa93552a470; trace=916f455b-b6da-4c5c-b7ef-eeb80bc2b0f4,id=916f455b-b6da-4c5c-b7ef-eeb80bc2b0f4; trace=ca1958b4-ea99-4099-b882-5ba5a7dc8463,id=ca1958b4-ea99-4099-b882-5ba5a7dc8463; trace=ec762afa-644c-4410-8209-66272e953e9e,id=ec762afa-644c-4410-8209-66272e953e9e; trace=b9ec6560-7b7e-4ff0-8089-bdb7ccdf1187,id=b9ec6560-7b7e-4ff0-8089-bdb7ccdf1187; trace=13200ecc-cabf-4344-9f7a-44977b3a8b5f,id=13200ecc-cabf-4344-9f7a-44977b3a8b5f; trace=11175778-553d-4c3c-91e2-36c65899dab1,id=11175778-553d-4c3c-91e2-36c65899dab1; trace=641ecca1-efbd-4838-8c6a-fd72ef16d6eb,id=641ecca1-efbd-4838-8c6a-fd72ef16d6eb; trace=b41cb4d2-ecb1-4963-85a1-3d8cfab2a629,id=b41cb4d2-ecb1-4963-85a1-3d8cfab2a629; trace=16f1ab52-3284-4c36-a9eb-15d6bdcc29b4,id=16f1ab52-3284-4c36-a9eb-15d6bdcc29b4; trace=f3f0d965-f2bd-4b86-9978-46660077edff,id=f3f0d965-f2bd-4b86-9978-46660077edff; trace=99c8756b-ff17-42de-b9d6-caa4255e66d9,id=99c8756b-ff17-42de-b9d6-caa4255e66d9; trace=898a4f98-7a66-4738-beb6-28d8c6069e84,id=898a4f98-7a66-4738-beb6-28d8c6069e84; trace=32ab8303-b75e-4415-998d-e6fd1de78f40,id=32ab8303-b75e-4415-998d-e6fd1de78f40; trace=e7a0e89a-abd7-499f-9ad2-664f6269e83d,id=e7a0e89a-abd7-499f-9ad2-664f6269e83d; trace=5946cd68-19f2-4e9b-a270-52bc3700ff3f,id=5946cd68-19f2-4e9b-a270-52bc3700ff3f; trace=a0604959-a62e-45cf-92c8-233f4e0d0485,id=a0604959-a62e-45cf-92c8-233f4e0d0485; trace=b07429b9-39db-4864-af2a-b89f73fa5d67,id=b07429b9-39db-4864-af2a-b89f73fa5d67; trace=bebb7cd8-f9ef-4506-9229-8e439ca53e86,id=bebb7cd8-f9ef-4506-9229-8e439ca53e86; trace=fdda75b7-2d10-4d3d-8efa-dd923dd89512,id=fdda75b7-2d10-4d3d-8efa-dd923dd89512; trace=98983796-783b-4b38-b60c-3cfe0f9b4597,id=98983796-783b-4b38-b60c-3cfe0f9b4597; trace=e26923e2-ab25-48fa-9c66-4751ef955a4f,id=e26923e2-ab25-48fa-9c66-4751ef955a4f; trace=9487c0dd-bdf9-4efd-8048-b9abd2f82a9c,id=9487c0dd-bdf9-4efd-8048-b9abd2f82a9c; trace=413b53eb-ecc7-49ac-a94b-b5a86e070750,id=413b53eb-ecc7-49ac-a94b-b5a86e070750; trace=574b44da-188b-4505-8666-5386bcdad7bc,id=574b44da-188b-4505-8666-5386bcdad7bc; trace=58c775ce-731b-4378-bb4b-519b9074cde0,id=58c775ce-731b-4378-bb4b-519b9074cde0; trace=5302af93-cc83-4a4b-8c8f-31eb6667bb06,id=5302af93-cc83-4a4b-8c8f-31eb6667bb06; trace=99184ff5-5428-427c-86e4-4dd59852e88f,id=99184ff5-5428-427c-86e4-4dd59852e88f; trace=d44e8ab8-e44a-495e-8e87-36df860b62a5,id=d44e8ab8-e44a-495e-8e87-36df860b62a5; trace=40e240b6-5eb3-4607-9c79-67c1af2dd5da,id=40e240b6-5eb3-4607-9c79-67c1af2dd5da; trace=f6cf42c3-4dbd-40da-b23a-18fdcd766622,id=f6cf42c3-4dbd-40da-b23a-18fdcd766622; trace=e7e0ecb0-04f3-4050-871b-26b3c3b62184,id=e7e0ecb0-04f3-4050-871b-26b3c3b62184; trace=4f753bfa-51d8-4d8e-bbf9-3fab2cb2bfd2,id=4f753bfa-51d8-4d8e-bbf9-3fab2cb2bfd2; trace=96f5ab1b-5e08-4fe9-b871-480d11488dbe,id=96f5ab1b-5e08-4fe9-b871-480d11488dbe; trace=3f28f7a3-91e7-47ad-9ffe-9a8cab0f8eeb,id=3f28f7a3-91e7-47ad-9ffe-9a8cab0f8eeb; trace=7cda3087-f137-47ae-8a71-e5d06b3fee85,id=7cda3087-f137-47ae-8a71-e5d06b3fee85; trace=1df06b19-de24-47c3-ad1f-25726f3b47cc,id=1df06b19-de24-47c3-ad1f-25726f3b47cc; trace=e89ca66e-d6b9-4f1b-a751-259a98c3c64b,id=e89ca66e-d6b9-4f1b-a751-259a98c3c64b; trace=9b6d1091-ba63-41e3-aa85-bc6d6bdf8183,id=9b6d1091-ba63-41e3-aa85-bc6d6bdf8183; patch: trace=1368479d-cf97-41b3-9bd0-473694a5d2b3,id=1368479d-cf97-41b3-9bd0-473694a5d2b3; trace=b0f283d9-dcaa-4518-a7c0-8463fa248f00,id=b0f283d9-dcaa-4518-a7c0-8463fa248f00; trace=997b96b7-faa1-43c8-aea8-5a30eae57e03,id=997b96b7-faa1-43c8-aea8-5a30eae57e03; trace=3b77a710-a3ad-4805-bc65-729badbf986e,id=3b77a710-a3ad-4805-bc65-729badbf986e; trace=67fb0452-8afc-43db-81f3-73661d0d1be8,id=67fb0452-8afc-43db-81f3-73661d0d1be8; trace=086a3728-2f06-43c5-a75b-f004323ae7b5,id=086a3728-2f06-43c5-a75b-f004323ae7b5; trace=b4f7d0f9-117c-43c0-b976-2a8f0d35f123,id=b4f7d0f9-117c-43c0-b976-2a8f0d35f123; trace=ad5820b7-6676-4ca8-af37-748f6b34b5db,id=ad5820b7-6676-4ca8-af37-748f6b34b5db; trace=2039faf7-6ea2-44d7-83fe-065b4ecac06e,id=2039faf7-6ea2-44d7-83fe-065b4ecac06e\n"
+     ]
+    }
+   ],
+   "source": [
+    "# 테스트셋 생성\n",
+    "# docs: 문서 데이터, 10: 생성할 질문의 수, distributions: 질문 유형별 분포, with_debugging_logs: 디버깅 로그 출력 여부\n",
+    "testset = generator.generate_with_langchain_docs(\n",
+    "    documents=docs, test_size=1, distributions=distributions, with_debugging_logs=True\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>question</th>\n",
+       "      <th>contexts</th>\n",
+       "      <th>ground_truth</th>\n",
+       "      <th>evolution_type</th>\n",
+       "      <th>metadata</th>\n",
+       "      <th>episode_done</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>What is the AI model used by Meta for machine ...</td>\n",
+       "      <td>[THE AI REPORT 2024-2 | 2024. 9. 9.\\n6. Meta50...</td>\n",
+       "      <td>The answer to given question is not present in...</td>\n",
+       "      <td>simple</td>\n",
+       "      <td>[{'source': '/home/jun/my_project/langchain_tu...</td>\n",
+       "      <td>True</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "                                            question  \\\n",
+       "0  What is the AI model used by Meta for machine ...   \n",
+       "\n",
+       "                                            contexts  \\\n",
+       "0  [THE AI REPORT 2024-2 | 2024. 9. 9.\\n6. Meta50...   \n",
+       "\n",
+       "                                        ground_truth evolution_type  \\\n",
+       "0  The answer to given question is not present in...         simple   \n",
+       "\n",
+       "                                            metadata  episode_done  \n",
+       "0  [{'source': '/home/jun/my_project/langchain_tu...          True  "
+      ]
+     },
+     "execution_count": 14,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# 생성된 테스트셋을 pandas DataFrame으로 변환\n",
+    "test_df = testset.to_pandas()\n",
+    "test_df"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "DataFrame 에 저장된 데이터셋을 csv 파일로 저장합니다"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 15,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>question</th>\n",
+       "      <th>contexts</th>\n",
+       "      <th>ground_truth</th>\n",
+       "      <th>evolution_type</th>\n",
+       "      <th>metadata</th>\n",
+       "      <th>episode_done</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>What is the AI model used by Meta for machine ...</td>\n",
+       "      <td>[THE AI REPORT 2024-2 | 2024. 9. 9.\\n6. Meta50...</td>\n",
+       "      <td>The answer to given question is not present in...</td>\n",
+       "      <td>simple</td>\n",
+       "      <td>[{'source': '/home/jun/my_project/langchain_tu...</td>\n",
+       "      <td>True</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "                                            question  \\\n",
+       "0  What is the AI model used by Meta for machine ...   \n",
+       "\n",
+       "                                            contexts  \\\n",
+       "0  [THE AI REPORT 2024-2 | 2024. 9. 9.\\n6. Meta50...   \n",
+       "\n",
+       "                                        ground_truth evolution_type  \\\n",
+       "0  The answer to given question is not present in...         simple   \n",
+       "\n",
+       "                                            metadata  episode_done  \n",
+       "0  [{'source': '/home/jun/my_project/langchain_tu...          True  "
+      ]
+     },
+     "execution_count": 15,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# DataFrame의 상위 5개 행 출력\n",
+    "test_df.head()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 19,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# DataFrame을 CSV 파일로 저장\n",
+    "test_df.to_csv(\"/home/jun/my_project/langchain_tutorial/Eval_dataset/ragas_synthetic_dataset.csv2\", index=False)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 15,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# from langchain_google_genai import ChatGoogleGenerativeAI\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 16,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# llm = ChatGoogleGenerativeAI(\n",
+    "#     model=\"gemini-1.5-pro\",\n",
+    "#     temperature=0)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "chromagroq",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.11.9"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}
